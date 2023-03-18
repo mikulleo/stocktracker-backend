@@ -2,24 +2,27 @@ import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import positionsRouter from './routes/positions';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+//const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT
 
 app.use(cors());
 app.use(express.json());
 
-mongoose.connect(process.env.MONGODB_URI as string);
+mongoose.connect(process.env.MONGODB_URI as string, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
 
 mongoose.connection.once('open', () => {
   console.log('MongoDB connection established successfully');
 });
 
-app.get('/', (req: express.Request, res: express.Response) => {
-  res.send('Hello from the backend!');
-});
+app.use('/positions', positionsRouter);
 
 app.listen(PORT, () => {
   console.log(`Server is running on port: ${PORT}`);
