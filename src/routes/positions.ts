@@ -1,6 +1,19 @@
-import { Router } from 'express';
+/*import { Router } from 'express';
 import { check, validationResult } from 'express-validator';
 import PositionModel, { IPosition } from '../models/position';
+import { savePositionStats } from '../positionStats';
+import { calculateOpenPositionStats, updateCurrentPrice } from '../positionStats';
+import axios from 'axios';
+
+const router = Router();
+
+const api_key_const = process.env.FINNHUB_API_KEY || 'cgb21ahr01ql0m8ri9ngcgb21ahr01ql0m8ri9o0'; */
+
+import { Router } from 'express';
+import { check, validationResult } from 'express-validator';
+import PositionModel, { IPosition } from '../models/Position';
+import axios from 'axios';
+import Position from '../models/Position';
 
 const router = Router();
 
@@ -45,14 +58,63 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
   }
 });
 
-router.get('/', async (req, res) => {
+router.get('/open', async (req, res) => {
   try {
-    const positions = await PositionModel.find();
-    res.status(200).json(positions);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
+    const updatePrices = req.query.updatePrices === 'true';
+    let openPositions = await PositionModel.find({ status: 'Open' });
+
+    for (let position of openPositions) {
+      if (position.currentPrice == null) {
+        // Fetch updated price from FinnHub API
+        const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${position.stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
+        const currentPrice = response.data.c;
+
+        // Calculate max drawdown, gain/loss, and gain/loss percentage
+        // Update the position object and save it to the database
+        position.currentPrice = currentPrice;
+        position.stopLoss = position.stopLoss || 0; // Add this line to include the stopLoss field
+        if (position.adjustedStopLoss == null) {
+          position.maxDrawdown = (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
+        }
+        else {
+          position.maxDrawdown = (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
+        }
+        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
+        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+        await position.save();
+      }
+    } 
+
+    if (updatePrices) {
+      for (let position of openPositions) {
+        // Fetch updated price from FinnHub API
+        const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${position.stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
+        const currentPrice = response.data.c;
+
+        // Calculate max drawdown, gain/loss, and gain/loss percentage
+        // Update the position object and save it to the database
+        position.currentPrice = currentPrice;
+        position.stopLoss = position.stopLoss || 0; // Add this line to include the stopLoss field
+        if (position.adjustedStopLoss == null) {
+          position.maxDrawdown = (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
+        }
+        else {
+          position.maxDrawdown = (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
+        }
+        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
+        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+        await position.save();
+      }
+    }
+
+    res.json(openPositions);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Internal server error' });
   }
 });
+
+
 
 // Close a position
 router.patch('/:id/close', async (req, res) => {
@@ -91,10 +153,10 @@ router.patch('/:id/close', async (req, res) => {
   }
 });
 
-// Close a position
+// Modify a position
 router.patch('/:id/modify', async (req, res) => {
   const { id } = req.params;
-  const { buyPrice, buyDate, buyTag, shares, sellPrice, sellDate, sellTag } = req.body;
+  const { buyPrice, buyDate, buyTag, shares, sellPrice, sellDate, sellTag, adjustedStopLoss } = req.body;
 
   try {
     const position = await PositionModel.findById(id);
@@ -118,6 +180,7 @@ router.patch('/:id/modify', async (req, res) => {
         sellDate,
         sellTag,
         sellCost,
+        adjustedStopLoss
       },
       { new: true }
     );
@@ -128,9 +191,9 @@ router.patch('/:id/modify', async (req, res) => {
   }
 });
 
-router.get('/open', async (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const positions = await PositionModel.find({ status: 'Open' });
+    const positions = await PositionModel.find();
     res.json(positions);
   } catch (error) {
     console.error(error);

@@ -8,12 +8,14 @@ export interface IPosition extends Document {
   buyTag: string;
   buyCost: number;
   buyNote: string;
-  stopLoss: number;
+  adjustedStopLoss?: number | null;
   status: 'Open' | 'Closed';
   sellPrice?: number;
   sellDate?: Date;
   sellTag?: string;
   sellCost?: number;
+  stopLoss: number;
+  currentPrice?: number;
 }
 
 const PositionSchema: Schema = new Schema({
@@ -24,6 +26,7 @@ const PositionSchema: Schema = new Schema({
   buyTag: { type: String },
   stopLoss: { type: Number, required: true },
   buyNote: { type: String },
+  adjustedStopLoss: { type: Number },
   buyCost: { type: Number, required: true},
   status: {
     type: String,
@@ -35,6 +38,22 @@ const PositionSchema: Schema = new Schema({
   sellTag: { type: String, default: '' },
   sellNote: { type: String },
   sellCost: { type: Number },
+  currentPrice: { type: Number },
+  maxDrawdown: {
+    type: Number,
+    required: true,
+    default: 0,
+  },
+  gainLoss: {
+    type: Number,
+    required: true,
+    default: 0,
+  },
+  gainLossPercentage: {
+    type: Number,
+    required: true,
+    default: 0,
+  },
 });
 
 export default mongoose.model<IPosition>('Position', PositionSchema);
