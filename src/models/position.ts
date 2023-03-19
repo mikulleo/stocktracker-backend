@@ -16,6 +16,7 @@ export interface IPosition extends Document {
   sellCost?: number;
   stopLoss: number;
   currentPrice?: number;
+  fullPositionSize: number;
 }
 
 const PositionSchema: Schema = new Schema({
@@ -54,6 +55,7 @@ const PositionSchema: Schema = new Schema({
     required: true,
     default: 0,
   },
+  fullPositionSize: { type: Number },
 });
 
 export default mongoose.model<IPosition>('Position', PositionSchema);

@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import positionsRouter from './routes/positions';
 import stockPricesRouter from './routes/stockPrices';
+import fullPositionSizeRouter from './routes/fullPositionSize';
 
 dotenv.config();
 
@@ -14,6 +15,7 @@ const PORT = process.env.PORT
 app.use(cors());
 app.use(express.json());
 app.use('/api/stock-prices', stockPricesRouter);
+app.use('/api/full-position-size', fullPositionSizeRouter);
 
 mongoose.connect(process.env.MONGODB_URI as string, {
   useNewUrlParser: true,

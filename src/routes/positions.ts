@@ -30,7 +30,7 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     return res.status(400).json({ errors: errors.array() });
   }
 
-  const { stockSymbol, shares } = req.body;
+  const { stockSymbol, shares, fullPositionSize } = req.body;
   const buyPrice = req.body.buyPrice || 0; // Set default value
   const buyDate = req.body.buyDate || new Date(); // Set default value
   const buyTag = req.body.buyTag || ''; // Set default value
@@ -47,6 +47,7 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     buyTag,
     buyNote,
     buyCost,
+    fullPositionSize,
   });
 
   try {
