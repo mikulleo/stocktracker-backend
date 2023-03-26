@@ -14,6 +14,7 @@ import { check, validationResult } from 'express-validator';
 import PositionModel, { IPosition } from '../models/Position';
 import axios from 'axios';
 import Position from '../models/Position';
+import positionStat from '../models/positionStat';
 
 const router = Router();
 
@@ -36,6 +37,7 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
   const buyTag = req.body.buyTag || ''; // Set default value
   const stopLoss = req.body.stopLoss || 0; // Set default value
   const buyNote = req.body.buyNote || ''; // Set default value
+  const commission = req.body.commission || 0; // Set default value
   const buyCost = buyPrice * shares;
 
   const newPosition = new PositionModel({
@@ -47,6 +49,7 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     buyTag,
     buyNote,
     buyCost,
+    commission,
     fullPositionSize,
   });
 
@@ -65,6 +68,17 @@ router.get('/open', async (req, res) => {
     let openPositions = await PositionModel.find({ status: 'Open' });
 
     for (let position of openPositions) {
+
+      if (position.initialRisk == null ) {
+        position.initialRisk = ((position.buyPrice - position.stopLoss) / position.buyPrice) * 100;
+      }
+      if (position.adjustedStopLoss == null) {
+        position.adjustedRisk = 0;
+      }
+      else {
+        position.adjustedRisk = position.adjustedStopLoss ? ((position.buyPrice - position.adjustedStopLoss) / position.buyPrice) * 100 : position.initialRisk;
+      }
+
       if (position.currentPrice == null) {
         // Fetch updated price from FinnHub API
         const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${position.stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
@@ -74,14 +88,18 @@ router.get('/open', async (req, res) => {
         // Update the position object and save it to the database
         position.currentPrice = currentPrice;
         position.stopLoss = position.stopLoss || 0; // Add this line to include the stopLoss field
+
+        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
+        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+        
         if (position.adjustedStopLoss == null) {
           position.maxDrawdown = (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
         }
         else {
           position.maxDrawdown = (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
         }
-        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
-        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+
+
         await position.save();
       }
     } 
@@ -96,14 +114,21 @@ router.get('/open', async (req, res) => {
         // Update the position object and save it to the database
         position.currentPrice = currentPrice;
         position.stopLoss = position.stopLoss || 0; // Add this line to include the stopLoss field
+        
+        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
+        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+
+        position.adjustedRisk = position.adjustedStopLoss ? ((position.buyPrice - position.adjustedStopLoss) / position.buyPrice) * 100 : position.initialRisk;
+
         if (position.adjustedStopLoss == null) {
           position.maxDrawdown = (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
+          position.adjustedRisk = 0;
         }
         else {
           position.maxDrawdown = (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
+          position.adjustedRisk = position.adjustedStopLoss ? ((position.buyPrice - position.adjustedStopLoss) / position.buyPrice) * 100 : position.initialRisk;
         }
-        position.gainLoss = (currentPrice * position.shares) - (position.buyPrice * position.shares);
-        position.gainLossPercentage = ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
+
         await position.save();
       }
     }
@@ -121,6 +146,8 @@ router.get('/open', async (req, res) => {
 router.patch('/:id/close', async (req, res) => {
   const { id } = req.params;
   const { sellPrice, sellDate, sellTag, sellNote } = req.body;
+  let { commission } = req.body;
+  let normalizedGainLossPercentage = null;
 
   try {
     const position = await PositionModel.findById(id);
@@ -133,7 +160,16 @@ router.patch('/:id/close', async (req, res) => {
       return res.status(400).json({ message: 'Position is already closed' });
     }
 
+    commission = commission + position.commission;
     const sellCost = position.shares * (sellPrice || 0);
+    const gainLoss = (sellPrice * position.shares) - (position.buyPrice * position.shares);
+    const gainLossPercentage = ((sellPrice - position.buyPrice) / position.buyPrice) * 100;
+    if (position.fullPositionSize !== null && position.fullPositionSize !== 0) {
+      normalizedGainLossPercentage = (position.buyCost / position.fullPositionSize) * gainLossPercentage;
+    }
+    else {
+      normalizedGainLossPercentage = 0;
+    }
 
     const updatedPosition = await PositionModel.findByIdAndUpdate(
       id,
@@ -144,6 +180,10 @@ router.patch('/:id/close', async (req, res) => {
         sellTag,
         sellCost,
         sellNote,
+        gainLoss,
+        gainLossPercentage,
+        normalizedGainLossPercentage,
+        commission,
       },
       { new: true }
     );
@@ -169,22 +209,38 @@ router.patch('/:id/modify', async (req, res) => {
     const buyCost = position.shares * (buyPrice || 0);
     const sellCost = position.shares * (sellPrice || 0);
 
-    const updatedPosition = await PositionModel.findByIdAndUpdate(
-      id,
-      {
-        buyPrice,
-        buyDate,
-        buyTag,
-        buyCost,
-        shares,
-        sellPrice,
-        sellDate,
-        sellTag,
-        sellCost,
-        adjustedStopLoss
-      },
-      { new: true }
-    );
+    let gainLoss = null;
+    let gainLossPercentage = null;
+    let normalizedGainLossPercentage = null;
+
+    if (position.status === "Closed" && sellPrice && position.buyPrice) {
+      gainLoss = (sellPrice * position.shares) - (position.buyPrice * position.shares);
+      gainLossPercentage = ((sellPrice - position.buyPrice) / position.buyPrice) * 100;
+      if (position.fullPositionSize !== null && position.fullPositionSize !== 0) {
+        normalizedGainLossPercentage = (position.buyCost / position.fullPositionSize) * gainLossPercentage;
+      }
+      else {
+        normalizedGainLossPercentage = 0;
+      }  
+    }
+
+    const updateObject = {
+      buyPrice,
+      buyDate,
+      buyTag,
+      buyCost,
+      shares,
+      sellPrice,
+      sellDate,
+      sellTag,
+      sellCost,
+      adjustedStopLoss,
+      ...(gainLoss !== null && { gainLoss }),
+      ...(gainLossPercentage !== null && { gainLossPercentage }),
+      ...(normalizedGainLossPercentage !== null && { normalizedGainLossPercentage }),
+    };
+
+    const updatedPosition = await PositionModel.findByIdAndUpdate(id, updateObject, { new: true });
 
     res.status(200).json(updatedPosition);
   } catch (error) {
@@ -201,6 +257,28 @@ router.get('/', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+router.get('/', async (req, res) => {
+  try {
+    const positions = await PositionModel.find();
+    res.json(positions);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Fetch closed positions
+router.get('/closed', async (req, res) => {
+  try {
+    const closedPositions = await PositionModel.find({ status: 'Closed' });
+    res.json(closedPositions);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
 
 
 export default router;

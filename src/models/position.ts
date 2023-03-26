@@ -15,8 +15,11 @@ export interface IPosition extends Document {
   sellTag?: string;
   sellCost?: number;
   stopLoss: number;
+  commission: number;
   currentPrice?: number;
   fullPositionSize: number;
+  initialRisk: number;
+  adjustedRisk: number;
 }
 
 const PositionSchema: Schema = new Schema({
@@ -39,6 +42,7 @@ const PositionSchema: Schema = new Schema({
   sellTag: { type: String, default: '' },
   sellNote: { type: String },
   sellCost: { type: Number },
+  commission: { type: Number },
   currentPrice: { type: Number },
   maxDrawdown: {
     type: Number,
@@ -56,6 +60,14 @@ const PositionSchema: Schema = new Schema({
     default: 0,
   },
   fullPositionSize: { type: Number },
+  initialRisk: { type: Number },
+  adjustedRisk: { type: Number },
+  normalizedGainLossPercentage: {
+    type: Number,
+    required: true,
+    default: 0,
+  },
+
 });
 
 export default mongoose.model<IPosition>('Position', PositionSchema);
