@@ -20,6 +20,7 @@ export interface IPosition extends Document {
   fullPositionSize: number;
   initialRisk: number;
   adjustedRisk: number;
+  positionType: 'long' | 'short';
 }
 
 const PositionSchema: Schema = new Schema({
@@ -67,7 +68,7 @@ const PositionSchema: Schema = new Schema({
     required: true,
     default: 0,
   },
-
+  positionType: { type: String, enum: ['long', 'short'], default: 'long' },
 });
 
 export default mongoose.model<IPosition>('Position', PositionSchema);
