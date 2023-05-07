@@ -1,12 +1,6 @@
-/*import { Router } from 'express';
-import { check, validationResult } from 'express-validator';
-import PositionModel, { IPosition } from '../models/position';
-import { savePositionStats } from '../positionStats';
-import { calculateOpenPositionStats, updateCurrentPrice } from '../positionStats';
-import axios from 'axios';
+// routes - positions
 
-const router = Router();
-
+/*const router = Router();
 const api_key_const = process.env.FINNHUB_API_KEY || 'cgb21ahr01ql0m8ri9ngcgb21ahr01ql0m8ri9o0'; */
 
 import { Router } from 'express';
@@ -18,13 +12,20 @@ import positionStat from '../models/positionStat';
 
 const router = Router();
 
-async function closePosition(id, sellPrice, sellDate, sellTag, sellCost, sellNote, commission) {
+async function closePosition(id, sharesToClose, sellPrice, sellDate, sellTag, sellCost, sellNote, commission) {
   try {
     const position = await PositionModel.findById(id);
+    const initialShares = position.initialShares;
 
     if (!position) {
       throw new Error('Position not found');
     }
+
+    if (sharesToClose > position.shares) {
+      throw new Error('Shares to close exceed the open shares');
+    }
+
+    const isFullyClosing = sharesToClose === position.shares;
 
     const gainLoss = position.positionType === 'short'
       ? (position.buyPrice * position.shares) - (sellPrice * position.shares)
@@ -41,22 +42,68 @@ async function closePosition(id, sellPrice, sellDate, sellTag, sellCost, sellNot
       normalizedGainLossPercentage = 0;
     }
 
-    const updatedPosition = await PositionModel.findByIdAndUpdate(
+    const updatedShares = position.shares - sharesToClose; // reduced number of shares
+    const updatedBuyCost = (updatedShares / position.shares) * position.buyCost;
+
+    const partialReduction = {
+      shares: sharesToClose,
+      sellPrice,
+      sellDate,
+      sellTag,
+      sellCost,
+      sellNote,
+      gainLoss,
+      gainLossPercentage,
+      normalizedGainLossPercentage,
+      commission,
+    };
+
+    let updatedPosition;
+
+    if (isFullyClosing) {
+      // Calculate final position stats
+      const finalStats = position.partialReductions.concat(partialReduction).reduce((acc, reduction) => {
+        // try to add logs here
+        acc.gainLoss += reduction.gainLoss;
+        acc.normalizedGainLossPercentage += reduction.normalizedGainLossPercentage;
+        acc.weightedGainLossPercentage += (reduction.gainLossPercentage * reduction.shares) / initialShares;
+        return acc;
+      },
+      {
+        gainLoss: 0,
+        normalizedGainLossPercentage: 0,
+        weightedGainLossPercentage: 0,
+      });
+
+    updatedPosition = await PositionModel.findByIdAndUpdate(
       id,
       {
         status: 'Closed',
+        shares: 0,
+        buyCost: 0,
         sellPrice,
         sellDate,
         sellTag,
         sellCost,
         sellNote,
-        gainLoss,
-        gainLossPercentage,
-        normalizedGainLossPercentage,
+        gainLoss: finalStats.gainLoss,
+        gainLossPercentage: finalStats.weightedGainLossPercentage,
+        normalizedGainLossPercentage: finalStats.normalizedGainLossPercentage,
         commission,
       },
       { new: true }
     );
+    } else {
+      updatedPosition = await PositionModel.findByIdAndUpdate(
+        id,
+        {
+          shares: updatedShares,
+          buyCost: updatedBuyCost,
+          partialReductions: [...position.partialReductions, partialReduction],
+        },
+        { new: true }
+      );
+    }
 
     return updatedPosition;
   } catch (error) {
@@ -109,16 +156,16 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     sellDate,
     sellTag,
     sellNote,
+    initialShares: shares,
   });
 
   try {
     await newPosition.save();
     
     // Check if the status is closed and run the close logic
-    if (req.body.status === 'Closed') {
-      //const { sellPrice, sellDate, sellTag, sellNote } = req.body;
-      
-      const updatedPosition = await closePosition(newPosition._id, sellPrice, sellDate, sellTag, newPosition.shares*sellPrice, sellNote, 0);
+    if (req.body.status === 'Closed') {      
+      //const updatedPosition = await closePosition(newPosition._id, sellPrice, sellDate, sellTag, newPosition.shares*sellPrice, sellNote, 0);
+      const updatedPosition = await closePosition(newPosition._id, newPosition.shares, sellPrice, sellDate, sellTag, newPosition.shares*sellPrice, sellNote, commission);
 
       // Send the closed position as a response
       res.status(201).json(updatedPosition);
@@ -249,10 +296,11 @@ router.get('/open', async (req, res) => {
 // Close a position
 router.patch('/:id/close', async (req, res) => {
   const id = req.params.id;
-  const { sellPrice, sellDate, sellTag, sellCost, sellNote, commission } = req.body;
+  const { sharesToClose, sellPrice, sellDate, sellTag, sellNote, commission } = req.body;
+  const sellCost = sharesToClose * sellPrice;
 
   try {
-    const updatedPosition = await closePosition(id, sellPrice, sellDate, sellTag, sellCost, sellNote, commission);
+    const updatedPosition = await closePosition(id, sharesToClose, sellPrice, sellDate, sellTag, sellCost, sellNote, commission);
     res.status(200).json(updatedPosition);
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -350,6 +398,36 @@ router.get('/closed', async (req, res) => {
   }
 });
 
+/*
+// Reduce a position
+router.patch('/:id/reduce', async (req, res) => {
+  const id = req.params.id;
+  const { reduceShares } = req.body;
 
+  try {
+    const position = await PositionModel.findById(id);
+
+    if (!position) {
+      throw new Error('Position not found');
+    }
+
+    if (position.shares - position.reducedShares < reduceShares) {
+      throw new Error('Cannot reduce more shares than available');
+    }
+
+    const updatedPosition = await PositionModel.findByIdAndUpdate(
+      id,
+      {
+        reducedShares: position.reducedShares + reduceShares,
+        shares: position.shares - reduceShares,
+      },
+      { new: true }
+    );
+
+    res.status(200).json(updatedPosition);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});*/
 
 export default router;

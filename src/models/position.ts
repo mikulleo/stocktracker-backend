@@ -1,3 +1,4 @@
+// models - position
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IPosition extends Document {
@@ -21,6 +22,8 @@ export interface IPosition extends Document {
   initialRisk: number;
   adjustedRisk: number;
   positionType: 'long' | 'short';
+  reducedShares: number;
+  partialReductions: [];
 }
 
 const PositionSchema: Schema = new Schema({
@@ -69,6 +72,35 @@ const PositionSchema: Schema = new Schema({
     default: 0,
   },
   positionType: { type: String, enum: ['long', 'short'], default: 'long' },
+  reducedShares: { type: Number, default: 0 },
+  partialReductions: [
+    {
+      shares: Number,
+      sellPrice: Number,
+      sellDate: Date,
+      sellTag: String,
+      sellCost: Number,
+      sellNote: String,
+      gainLoss: Number,
+      gainLossPercentage: Number,
+      normalizedGainLossPercentage: Number,
+      commission: Number,
+    },
+  ],
+  initialShares: {
+    type: Number,
+    //required: true,
+  },
+  
 });
+
+PositionSchema.virtual('hasPartialReductions').get(function (this: IPosition) {
+  return this.partialReductions && this.partialReductions.length > 0;
+});
+
+PositionSchema.set('toJSON', {
+  virtuals: true,
+});
+
 
 export default mongoose.model<IPosition>('Position', PositionSchema);
