@@ -7,8 +7,7 @@ import { Router } from 'express';
 import { check, validationResult } from 'express-validator';
 import PositionModel, { IPosition } from '../models/Position';
 import axios from 'axios';
-import Position from '../models/Position';
-import positionStat from '../models/positionStat';
+import { calculateStats } from '../statsUtils';
 
 const router = Router();
 
@@ -28,8 +27,8 @@ async function closePosition(id, sharesToClose, sellPrice, sellDate, sellTag, se
     const isFullyClosing = sharesToClose === position.shares;
 
     const gainLoss = position.positionType === 'short'
-      ? (position.buyPrice * position.shares) - (sellPrice * position.shares)
-      : (sellPrice * position.shares) - (position.buyPrice * position.shares);
+      ? (position.buyPrice * sharesToClose) - (sellPrice * sharesToClose)
+      : (sellPrice * sharesToClose) - (position.buyPrice * sharesToClose);
 
     const gainLossPercentage = position.positionType === 'short'
       ? ((position.buyPrice - sellPrice) / position.buyPrice) * 100
@@ -37,7 +36,7 @@ async function closePosition(id, sharesToClose, sellPrice, sellDate, sellTag, se
 
     let normalizedGainLossPercentage;
     if (position.fullPositionSize !== null && position.fullPositionSize !== 0) {
-      normalizedGainLossPercentage = (position.buyCost / position.fullPositionSize) * gainLossPercentage;
+      normalizedGainLossPercentage = (position.buyCost*(sharesToClose/position.shares) / position.fullPositionSize) * gainLossPercentage;
     } else {
       normalizedGainLossPercentage = 0;
     }
@@ -67,12 +66,14 @@ async function closePosition(id, sharesToClose, sellPrice, sellDate, sellTag, se
         acc.gainLoss += reduction.gainLoss;
         acc.normalizedGainLossPercentage += reduction.normalizedGainLossPercentage;
         acc.weightedGainLossPercentage += (reduction.gainLossPercentage * reduction.shares) / initialShares;
+        acc.commission += reduction.commission;
         return acc;
       },
       {
         gainLoss: 0,
         normalizedGainLossPercentage: 0,
         weightedGainLossPercentage: 0,
+        commission: 0,
       });
 
     updatedPosition = await PositionModel.findByIdAndUpdate(
@@ -148,6 +149,7 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     buyTag,
     buyNote,
     buyCost,
+    initialBuyCost: buyCost,
     commission,
     fullPositionSize,
     positionType,
@@ -164,7 +166,6 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     
     // Check if the status is closed and run the close logic
     if (req.body.status === 'Closed') {      
-      //const updatedPosition = await closePosition(newPosition._id, sellPrice, sellDate, sellTag, newPosition.shares*sellPrice, sellNote, 0);
       const updatedPosition = await closePosition(newPosition._id, newPosition.shares, sellPrice, sellDate, sellTag, newPosition.shares*sellPrice, sellNote, commission);
 
       // Send the closed position as a response
@@ -172,9 +173,8 @@ router.post('/add', buyOrderValidationRules, async (req, res) => {
     } else {
       res.status(201).json(newPosition);
     }
-    //res.status(201).json(newPosition);
   } catch (error) {
-    console.error('Error:', error); // Add this line to log the error
+    console.error('Error:', error);
     res.status(400).json({ message: error.message });
   }
 });
@@ -209,7 +209,7 @@ router.get('/open', async (req, res) => {
         // Calculate max drawdown, gain/loss, and gain/loss percentage
         // Update the position object and save it to the database
         position.currentPrice = currentPrice;
-        position.stopLoss = position.stopLoss || 0; // Add this line to include the stopLoss field
+        position.stopLoss = position.stopLoss || 0;
 
         position.gainLoss = position.positionType === 'short'
           ? (position.buyPrice * position.shares) - (currentPrice * position.shares)
@@ -220,13 +220,11 @@ router.get('/open', async (req, res) => {
           : ((currentPrice - position.buyPrice) / position.buyPrice) * 100;
         
         if (position.adjustedStopLoss == null) {
-          // position.maxDrawdown = (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
           position.maxDrawdown = position.positionType === 'short'
             ? (position.stopLoss * position.shares) > 0 ? (position.stopLoss * position.shares) - (currentPrice * position.shares) : 0
             : (position.stopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.stopLoss * position.shares) : 0;
         }
         else {
-          // position.maxDrawdown = (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
           position.maxDrawdown = position.positionType === 'short'
             ? (position.adjustedStopLoss * position.shares) > 0 ? (position.adjustedStopLoss * position.shares) - (currentPrice * position.shares) : 0
             : (position.adjustedStopLoss * position.shares) > 0 ? (currentPrice * position.shares) - (position.adjustedStopLoss * position.shares) : 0;
@@ -290,8 +288,6 @@ router.get('/open', async (req, res) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 });
-
-
 
 // Close a position
 router.patch('/:id/close', async (req, res) => {
@@ -398,36 +394,13 @@ router.get('/closed', async (req, res) => {
   }
 });
 
-/*
-// Reduce a position
-router.patch('/:id/reduce', async (req, res) => {
-  const id = req.params.id;
-  const { reduceShares } = req.body;
-
+router.get('/stats', async (_req, res) => {
   try {
-    const position = await PositionModel.findById(id);
-
-    if (!position) {
-      throw new Error('Position not found');
-    }
-
-    if (position.shares - position.reducedShares < reduceShares) {
-      throw new Error('Cannot reduce more shares than available');
-    }
-
-    const updatedPosition = await PositionModel.findByIdAndUpdate(
-      id,
-      {
-        reducedShares: position.reducedShares + reduceShares,
-        shares: position.shares - reduceShares,
-      },
-      { new: true }
-    );
-
-    res.status(200).json(updatedPosition);
+    const stats = await calculateStats();
+    res.status(200).json(stats);
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(500).json({ message: error.message });
   }
-});*/
+});
 
 export default router;

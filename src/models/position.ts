@@ -8,6 +8,7 @@ export interface IPosition extends Document {
   buyDate: Date;
   buyTag: string;
   buyCost: number;
+  initialBuyCost?: number,
   buyNote: string;
   adjustedStopLoss?: number | null;
   status: 'Open' | 'Closed';
@@ -36,6 +37,7 @@ const PositionSchema: Schema = new Schema({
   buyNote: { type: String },
   adjustedStopLoss: { type: Number },
   buyCost: { type: Number, required: true},
+  initialBuyCost: { type: Number },
   status: {
     type: String,
     enum: ['Open', 'Closed'],
